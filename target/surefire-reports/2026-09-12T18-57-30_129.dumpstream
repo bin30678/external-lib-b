@@ -1,5 +1,0 @@
-# Created at 2026-09-12T18:57:30.627
-Boot Manifest-JAR contains absolute paths in classpath 'E:\antigravity_workspace\external-lib-b\target\test-classes'
-Hint: <argLine>-Djdk.net.URLClassPath.disableClassPathURLCheck=true</argLine>
-'other' has different root
-
