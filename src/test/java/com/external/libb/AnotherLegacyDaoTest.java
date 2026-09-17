@@ -1,23 +1,26 @@
 package com.external.libb;
 
 import com.external.libb.dao.AnotherLegacyDao;
-import com.external.libb.service.AnotherLegacyService;
-import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.Test;
+import org.junit.Assert;
+import org.junit.Test;
+import org.junit.runner.RunWith;
 import org.mockito.Mockito;
 import org.springframework.context.ApplicationContext;
-import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
 
-import jakarta.annotation.Resource;
+import javax.annotation.Resource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.util.List;
 
 /**
- * 外部 JAR B 的 Spring 整合測試
- * 透過 Spring 讀取 applicationContext-libb.xml，將所有 Bean 註冊並委派給 Spring 容器管理與注入
+ * 外部 JAR B 的 Spring 整合測試 (JUnit 4 / Spring 3.2 相容)
+ * 驗證 JAR B 僅有 DAO 層（無 Service 層），且所有資料庫方法皆必須傳入 Connection 與參數。
  */
-@SpringJUnitConfig(locations = "classpath:applicationContext-libb.xml")
+@RunWith(SpringJUnit4ClassRunner.class)
+@ContextConfiguration(locations = "classpath:applicationContext-libb.xml")
 public class AnotherLegacyDaoTest {
 
     @Resource
@@ -26,19 +29,13 @@ public class AnotherLegacyDaoTest {
     @Resource(name = "anotherLegacyDao")
     private AnotherLegacyDao dao;
 
-    @Resource(name = "anotherLegacyService")
-    private AnotherLegacyService service;
-
     @Test
-    public void testSpringContextLoaded() {
-        Assertions.assertNotNull(applicationContext, "Spring ApplicationContext 必須成功載入");
-        Assertions.assertNotNull(dao, "Spring 必須透過 component-scan 成功建立並注入 AnotherLegacyDao");
-        Assertions.assertNotNull(service, "Spring 必須透過 component-scan 成功建立並注入 AnotherLegacyService");
-        Assertions.assertTrue(applicationContext.containsBean("anotherLegacyDao"));
-        Assertions.assertTrue(applicationContext.containsBean("anotherLegacyService"));
-        // 驗證 Service 內部的 DAO 是由 Spring 注入的
-        Assertions.assertNotNull(service.getAnotherLegacyDao(), "Service 中的 DAO 必須由 Spring 注入");
-        Assertions.assertSame(dao, service.getAnotherLegacyDao());
+    public void testSpringContextLoaded_daoOnly() {
+        Assert.assertNotNull("Spring ApplicationContext 必須成功載入", applicationContext);
+        Assert.assertNotNull("Spring 必須透過 component-scan 成功建立並注入 AnotherLegacyDao", dao);
+        Assert.assertTrue(applicationContext.containsBean("anotherLegacyDao"));
+        // 驗證 JAR B 不包含任何 Service 層 Bean
+        Assert.assertFalse("JAR B 不應包含 Service 層 Bean", applicationContext.containsBean("anotherLegacyService"));
     }
 
     @Test
@@ -53,9 +50,8 @@ public class AnotherLegacyDaoTest {
         Mockito.when(mockRs.getInt(1)).thenReturn(42);
 
         int count = dao.queryInactiveCustomerCount(mockConn);
-        Assertions.assertEquals(42, count);
+        Assert.assertEquals(42, count);
 
-        // 驗證 PreparedStatement 和 ResultSet 有被關閉，但 Connection 不能被關閉
         Mockito.verify(mockRs, Mockito.times(1)).close();
         Mockito.verify(mockPs, Mockito.times(1)).close();
         Mockito.verify(mockConn, Mockito.never()).close();
@@ -70,7 +66,7 @@ public class AnotherLegacyDaoTest {
         Mockito.when(mockPs.executeUpdate()).thenReturn(1);
 
         int updated = dao.updateCustomerStatus(mockConn, "Alice", "SUSPENDED");
-        Assertions.assertEquals(1, updated);
+        Assert.assertEquals(1, updated);
 
         Mockito.verify(mockPs, Mockito.times(1)).setString(1, "SUSPENDED");
         Mockito.verify(mockPs, Mockito.times(1)).setString(2, "Alice");
@@ -79,19 +75,36 @@ public class AnotherLegacyDaoTest {
     }
 
     @Test
-    public void testServiceIntegrationWithDao() throws Exception {
-        // 驗證 Spring 管理的 Service 呼叫注入的 DAO
+    public void testInsertCustomer() throws Exception {
+        Connection mockConn = Mockito.mock(Connection.class);
+        PreparedStatement mockPs = Mockito.mock(PreparedStatement.class);
+
+        Mockito.when(mockConn.prepareStatement(Mockito.anyString())).thenReturn(mockPs);
+        Mockito.when(mockPs.executeUpdate()).thenReturn(1);
+
+        int inserted = dao.insertCustomer(mockConn, "Bob", "ACTIVE");
+        Assert.assertEquals(1, inserted);
+
+        Mockito.verify(mockPs, Mockito.times(1)).setString(1, "Bob");
+        Mockito.verify(mockPs, Mockito.times(1)).setString(2, "ACTIVE");
+        Mockito.verify(mockPs, Mockito.times(1)).close();
+        Mockito.verify(mockConn, Mockito.never()).close();
+    }
+
+    @Test
+    public void testQueryCustomerNamesByStatus() throws Exception {
         Connection mockConn = Mockito.mock(Connection.class);
         PreparedStatement mockPs = Mockito.mock(PreparedStatement.class);
         ResultSet mockRs = Mockito.mock(ResultSet.class);
 
         Mockito.when(mockConn.prepareStatement(Mockito.anyString())).thenReturn(mockPs);
         Mockito.when(mockPs.executeQuery()).thenReturn(mockRs);
-        Mockito.when(mockRs.next()).thenReturn(true);
-        Mockito.when(mockRs.getInt(1)).thenReturn(10);
+        Mockito.when(mockRs.next()).thenReturn(true, false);
+        Mockito.when(mockRs.getString("customer_name")).thenReturn("Bob");
 
-        int count = service.getInactiveCustomerCount(mockConn);
-        Assertions.assertEquals(10, count);
+        List<String> list = dao.queryCustomerNamesByStatus(mockConn, "ACTIVE");
+        Assert.assertEquals(1, list.size());
+        Assert.assertEquals("Bob", list.get(0));
 
         Mockito.verify(mockRs, Mockito.times(1)).close();
         Mockito.verify(mockPs, Mockito.times(1)).close();
